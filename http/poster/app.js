@@ -1,55 +1,78 @@
 const Inforex = require("./inforex");
+const { bodyParser, serveStaticFiles, authenticate } = require("./middleware/index.js");
+let { SESSIONS, USERS, POSTS } = require("./models/index.js");
+const { PORT } = require("./utils/constants.js")
 
-const PORT = 9001;
+// Create a new server instance.
 const server = new Inforex();
 
-const USERS = [
-    { id: 1, name: "Liam Brown", username: "laim23", password: "string" },
-    { id: 2, name: "Adam Brown", username: "adam23", password: "string" },
-    { id: 3, name: "Ben Brown", username: "ben23", password: "string" }
-];
+// Middleware to enable the static file routing.
+server.use(bodyParser);
+server.use(serveStaticFiles);
 
-let selectedUser;
-
-const POSTS = [
-    { id: 1, title: "This is the first post.", body: "lorem ipsum data is here for the conte of the post there is so much data that i cannot evcen fathom.", userId: 1 },
-    { id: 1, title: "This is the second post.", body: "lorem ipsum data is here for the conte of the post there is so much data that i cannot evcen fathom.", userId: 2 }
-];
 
 //--------- Files routes ------------//
-server.route("get", "*", (req, res) => {
-    res.status(200).sendFile("./public/index.html", "text/html")
-})
-
-server.route("get", "/public/styles.css", (req, res) => {
-    res.status(200).sendFile("./public/styles.css", "text/css")
-})
-
-server.route("get", "/public/scripts.js", (req, res, next) => {
-    console.log("Middleware running before serving script.");
-    next();
-}, (req, res) => {
-    res.status(200).sendFile("./public/scripts.js", "text/javascript")
+server.get("/", (req, res) => {
+    return res.status(200).sendFile("./public/index.html", "text/html")
 })
 
 //--------- JSON routes ------------//
-server.route("get", "/api/posts", (req, res) => {
+server.get("/api/posts", (req, res) => {
     res.status(200).json(POSTS.map((post) => ({ ...post, author: USERS.find((user) => user.id === post.userId).name })))
 })
 
-server.route("get", "/api/user", (req, res) => {
-    console.log(req.body);
-    res.status(404).json(req.authUser);
+server.post("/api/posts", authenticate, (req, res) => {
+    const title = req.body.title;
+    const body = req.body.body;
+
+    POSTS.push({ id: POSTS.length + 1, title, body, userId: req.authUser.id })
+    res.status(201).json({ message: "Post created successfully." });
 })
 
-server.route("post", "/api/login", (req, res) => {
+server.put("/api/user", authenticate, (req, res) => {
+    const username = req.body.username;
+    const name = req.body.name;
+    const password = req.body.password;
+
+    const idx = USERS.findIndex(user => user.id === req.authUser.id)
+    if (idx >= 0) {
+        USERS.splice(idx, 0, { ...USERS[idx], username, name, ...(password ? { password } : {}) })
+    }
+
+    res.status(201).json({ message: "User details updated." })
+})
+
+server.get("/api/user", authenticate, (req, res) => {
+    res.status(200).json(req.authUser);
+})
+
+server.delete("/api/logout", authenticate, (req, res) => {
+    // Clearing the sessions for the authenticated user.
+    const user = req.authUser;
+    let idx = SESSIONS.findIndex(session => session.userId === user.id);
+    if (idx >= 0)
+        SESSIONS.splice(idx, 1);
+    res.setHeader("Set-Cookie", `token=deleted; Path=/;`)
+    res.status(204);
+})
+
+server.post("/api/login", (req, res) => {
     const username = req.body.username;
     const password = req.body.password;
     const user = USERS.find((user) => user.username === username);
-    if (user.username !== username || user.password !== password) {
-        res.status(401).json({ error: "Please enter valid credentials." })
+    if (user == null || user.username !== username || user.password !== password) {
+        return res.status(401).json({ error: "Please enter valid credentials." })
     }
+
+    // Generate a random ten digit token.
+    const token = (Math.random() * 10000000000).toFixed(0).toString();
+
+    // save the generated token.
+    SESSIONS.push({ userId: user.id, token });
+
     req.authUser = user;
+
+    res.setHeader("Set-Cookie", `token=${token}; Path=/;`)
     res.status(200).json({ message: "User logged in successfully." });
 })
 

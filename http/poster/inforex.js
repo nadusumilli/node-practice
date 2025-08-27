@@ -6,14 +6,12 @@ class Inforex {
     constructor() {
         this.server = http.createServer();
         this.routes = {};
+        this.middlewares = [];
 
         this.server.on("request", async (req, res) => {
 
             // setup all the different functions to write to the response stream.
             res = this._setupResponseMethods(res);
-
-            // setup all the different functions to read the request stream.
-            req = await this._setupRequestMethods(req);
 
             // Middleware handling and route management.
             await this._handleRoutes(req, res);
@@ -22,32 +20,30 @@ class Inforex {
 
     _handleRoutes(req, res) {
         // if the routes object does not have a key of req.method + req.url, return 404
-        if (!this.routes[req.method + " " + req.url]) {
-            console.log(req.method, req.url)
-            if (req.method !== "GET") {
-                return res.status(404).json({ message: "This resource does not exist." });
-            }
-            req.url = "*"
+        if (!this.routes[req.method + " " + req.url] && (!req.method || !req.url.startsWith("/public"))) {
+            req.url = "/404"
         }
 
-        const handleMiddlewareCalls = (i = 0) => {
-            while (i < cbs.length) {
-                if (i !== cbs.length - 1) {
-                    cbs[i](req, res, (err) => {
-                        if (err) { return res.status(500).json({ message: "something fucked up" }) }
-                        handleMiddlewareCalls(i + 1);
-                    })
-                    return;
-                } else {
-                    cbs[i](req, res)
-                }
-                i++;
+        // Recursive function that runs all the middleware and runs the actual request at the end.
+        const runMiddleware = (req, res, middlewares, index) => {
+            if (index === middlewares.length) {
+                const request = middlewares.pop();
+                request(req, res);
+            } else {
+                middlewares[index](req, res, (err, name = "") => {
+                    if (err) { return res.status(500).json({ message: `${name}: Experiencing issues: ${err}` }) }
+                    runMiddleware(req, res, middlewares, index + 1);
+                })
             }
         }
 
         // creating all the callbacks and then calling the middleware function.
-        const cbs = this.routes[req.method + " " + req.url];
-        handleMiddlewareCalls();
+        if (this.routes[req.method + " " + req.url] != null) {
+            let cbs = [...this.middlewares, ...(Array.isArray(this.routes[req.method + " " + req.url]) ? this.routes[req.method + " " + req.url] : [this.routes[req.method + " " + req.url]])];
+            runMiddleware(req, res, cbs, 0);
+        } else {
+            runMiddleware(req, res, this.middlewares, 0);
+        }
     }
 
     _setupResponseMethods(res) {
@@ -84,32 +80,20 @@ class Inforex {
                 })
                 readable.pipe(res)
             } else {
+                // This method is only good for bodies that are less than high water mark value.
                 res.end(JSON.stringify(jsonData))
             }
         }
 
         res.status = (status) => {
             res.statusCode = status
+            if (status === 204) {
+                res.end()
+            }
             return res
         };
 
         return res;
-    }
-
-    _setupRequestMethods(req) {
-        return new Promise((res, rej) => {
-            let body = "";
-            req.on("data", (chunk) => {
-                body += chunk.toString("utf-8");
-            })
-
-            req.on("end", () => {
-                if (body) {
-                    req.body = JSON.parse(body);
-                }
-                res(req);
-            })
-        })
     }
 
     listen(port, cb) {
@@ -118,6 +102,30 @@ class Inforex {
 
     route = (method, url, ...cb) => {
         this.routes[method.toUpperCase() + " " + url] = cb
+    }
+
+    get = (url, ...cb) => {
+        this.route("get", url, ...cb);
+    }
+
+    post = (url, ...cb) => {
+        this.route("post", url, ...cb);
+    }
+
+    put = (url, ...cb) => {
+        this.route("put", url, ...cb);
+    }
+
+    patch = (url, ...cb) => {
+        this.route("patch", url, ...cb);
+    }
+
+    delete = (url, ...cb) => {
+        this.route("delete", url, ...cb);
+    }
+
+    use = (cb) => {
+        this.middlewares.push(cb);
     }
 }
 
